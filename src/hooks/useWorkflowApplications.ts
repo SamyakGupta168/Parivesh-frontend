@@ -1,0 +1,126 @@
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { apiRequest } from '@/lib/api';
+import type { ApplicationStatus } from '@/types';
+
+interface BackendApplication {
+  _id: string;
+  projectName: string;
+  sector?: string;
+  clearanceType: 'EC' | 'FC' | 'WL' | 'CRZ';
+  state: string;
+  district?: string;
+  status: string;
+  createdAt: string;
+  history?: Array<{
+    status?: string;
+  }>;
+  applicant?: {
+    name?: string;
+    organization?: string;
+  };
+}
+
+interface BackendApplicationsResponse {
+  success: boolean;
+  applications: BackendApplication[];
+}
+
+export interface WorkflowApplication {
+  id: string;
+  projectName: string;
+  sector: string;
+  state: string;
+  district: string;
+  clearanceType: 'EC' | 'FC' | 'WL' | 'CRZ';
+  status: ApplicationStatus;
+  createdAt: string;
+  proponent: string;
+  rawStatus: string;
+  hasCommitteeHistory: boolean;
+  isAwaitingCommitteeDecision: boolean;
+}
+
+const AUTH_TOKEN_KEY = 'parivesh_auth_token';
+
+const statusMap: Record<string, ApplicationStatus> = {
+  DRAFT: 'Pending',
+  SUBMITTED: 'State',
+  UNDER_SCRUTINY: 'Central',
+  EDS_RAISED: 'Clarification Requested',
+  RESUBMITTED: 'State',
+  REFERRED_TO_MEETING: 'Committee',
+  IN_MEETING: 'Committee',
+  APPROVED: 'Approved',
+  REJECTED: 'Rejected',
+};
+
+export function useWorkflowApplications() {
+  const [applications, setApplications] = useState<WorkflowApplication[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
+
+  const refetch = useCallback(async () => {
+    setIsLoading(true);
+    setLoadError('');
+
+    const token = localStorage.getItem(AUTH_TOKEN_KEY);
+
+    if (!token) {
+      setApplications([]);
+      setLoadError('Please sign in to view applications.');
+      setIsLoading(false);
+      return;
+    }
+
+    try {
+      const response = await apiRequest<BackendApplicationsResponse>('/api/applications', {
+        method: 'GET',
+        token,
+      });
+
+      const mapped = response.applications.map((application) => {
+        const historyStatuses = (application.history || []).map((entry) => entry.status || '');
+        const isAwaitingCommitteeDecision = application.status === 'REFERRED_TO_MEETING' || application.status === 'IN_MEETING';
+        const hasCommitteeHistory = isAwaitingCommitteeDecision || historyStatuses.includes('REFERRED_TO_MEETING') || historyStatuses.includes('IN_MEETING');
+
+        return {
+        id: application._id,
+        projectName: application.projectName,
+        sector: application.sector || '-',
+        state: application.state,
+        district: application.district || '-',
+        clearanceType: application.clearanceType,
+        status: statusMap[application.status] || 'Pending',
+        createdAt: application.createdAt,
+        proponent: application.applicant?.organization || application.applicant?.name || '-',
+        rawStatus: application.status,
+        hasCommitteeHistory,
+        isAwaitingCommitteeDecision,
+      };
+      });
+
+      setApplications(mapped);
+    } catch (error) {
+      setApplications([]);
+      setLoadError(error instanceof Error ? error.message : 'Failed to load applications.');
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refetch();
+  }, [refetch]);
+
+  const states = useMemo(() => {
+    return [...new Set(applications.map((application) => application.state))].sort();
+  }, [applications]);
+
+  return {
+    applications,
+    states,
+    isLoading,
+    loadError,
+    refetch,
+  };
+}
